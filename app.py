@@ -8,12 +8,15 @@ import pandas as pd
 import re
 import unicodedata
 
+# -----------------------
+# Styling
+# -----------------------
 st.markdown(
     """
     <style>
     [data-testid="stDataFrame"] div { font-size: 12px; }
 
-    /* Overlay background (click-through so it doesn't block the button) */
+    /* Overlay background */
     .overlay {
         position: fixed;
         inset: 0;
@@ -22,20 +25,19 @@ st.markdown(
         pointer-events: none;
     }
 
-    /* Modal box */
+    /* Modal box (visual) */
     .modal {
         position: fixed;
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
-        background: rgba(20, 20, 20, 0.98);
-        border: 1px solid rgba(255,255,255,0.15);
         border-radius: 14px;
-        padding: 22px 26px 70px 26px; /* extra bottom padding for button */
+        padding: 22px 26px 74px 26px; /* bottom padding for button area */
         width: min(520px, 92vw);
         z-index: 9999;
         box-shadow: 0 12px 50px rgba(0,0,0,0.55);
-        pointer-events: none; /* the HTML modal is just visuals */
+        pointer-events: none; /* visual only */
+        border: 1px solid rgba(0,0,0,0.15);
     }
 
     .modal-title {
@@ -55,17 +57,14 @@ st.markdown(
     }
     .modal-sub {
         text-align: center;
-        opacity: 0.8;
+        opacity: 0.85;
         margin-bottom: 10px;
     }
 
-    /*
-    We render a real Streamlit button in a container.
-    This CSS positions that container *on top of* the modal, so it's clickable.
-    */
+    /* Position the Streamlit button over the modal */
     div[data-testid="answer-next-btn"] {
         position: fixed !important;
-        top: calc(50% + 110px) !important;  /* adjust button vertical placement */
+        top: calc(50% + 110px) !important;  /* tweak if needed */
         left: 50% !important;
         transform: translateX(-50%) !important;
         width: min(260px, 60vw) !important;
@@ -105,8 +104,9 @@ def begin_round():
     st.session_state.player_id = get_new_player_id()
     st.session_state.guesses_left = 3
     st.session_state.feedback = ""
-    st.session_state.show_answer_overlay = False
-    st.session_state.last_answer = ""
+    st.session_state.show_overlay = False
+    st.session_state.overlay_name = ""
+    st.session_state.overlay_status = ""  # "correct" or "wrong"
 
 def next_round():
     st.session_state.round += 1
@@ -115,6 +115,14 @@ def next_round():
 def calc_df_height(n_rows: int, row_px: int = 36, header_px: int = 40, min_px: int = 140, max_px: int = 650) -> int:
     h = header_px + n_rows * row_px
     return max(min_px, min(h, max_px))
+
+def show_result_overlay(name: str, status: str):
+    """
+    status: "correct" or "wrong"
+    """
+    st.session_state.show_overlay = True
+    st.session_state.overlay_name = name
+    st.session_state.overlay_status = status
 
 # -----------------------
 # Session State init
@@ -151,22 +159,33 @@ except TypeError:
     st.dataframe(df, use_container_width=True, height=df_height)
 
 # -----------------------
-# Answer overlay (center of screen) + Next button inside
+# Result Overlay (Correct/Wrong)
 # -----------------------
-if st.session_state.show_answer_overlay:
+if st.session_state.show_overlay:
+    status = st.session_state.overlay_status
+
+    # Light green for correct, light red for wrong
+    if status == "correct":
+        bg = "rgb(46, 255, 12, 0.97)"  # light green
+        title = "Correct"
+        sub = "Nice. Click Next Player to continue."
+    else:
+        bg = "rgb(255, 53, 82, 0.97)"  # light red
+        title = "Answer"
+        sub = "Click Next Player to continue."
+
     st.markdown('<div class="overlay"></div>', unsafe_allow_html=True)
     st.markdown(
         f"""
-        <div class="modal">
-          <div class="modal-title">Answer</div>
-          <div class="modal-answer">{st.session_state.last_answer}</div>
-          <div class="modal-sub">Click Next Player to continue</div>
+        <div class="modal" style="background: {bg};">
+          <div class="modal-title">{title}</div>
+          <div class="modal-answer">{st.session_state.overlay_name}</div>
+          <div class="modal-sub">{sub}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # Render a REAL Streamlit button, then CSS-position it over the modal
     btn_holder = st.container()
     btn_holder.markdown('<div data-testid="answer-next-btn">', unsafe_allow_html=True)
     if st.button("Next Player", use_container_width=True):
@@ -193,8 +212,7 @@ if submitted:
     if normalize_name(guess) == normalize_name(answer_name):
         st.session_state.score += 1
         st.session_state.streak += 1
-        st.session_state.feedback = "✅ Correct!"
-        next_round()
+        show_result_overlay(answer_name, "correct")
         st.rerun()
     else:
         st.session_state.guesses_left -= 1
@@ -204,14 +222,12 @@ if submitted:
             st.session_state.feedback = f"❌ Incorrect. Try again. ({st.session_state.guesses_left} left)"
             st.rerun()
         else:
-            st.session_state.last_answer = answer_name
-            st.session_state.show_answer_overlay = True
+            show_result_overlay(answer_name, "wrong")
             st.rerun()
 
 if skip:
     st.session_state.streak = 0
-    st.session_state.last_answer = answer_name
-    st.session_state.show_answer_overlay = True
+    show_result_overlay(answer_name, "wrong")
     st.rerun()
 
 if st.session_state.feedback:
