@@ -62,6 +62,7 @@ st.markdown(
         margin-bottom: 10px;
     }
 
+    /* Button positioned inside overlay area */
     div[data-testid="answer-next-btn"] {
         position: fixed !important;
         top: calc(50% + 120px) !important;
@@ -87,6 +88,14 @@ st.markdown(
         line-height: 1;
         letter-spacing: 4px;
         user-select: none;
+    }
+
+    /* Cosmetic "locked" look for disabled skip */
+    .skip-locked-note {
+        font-size: 12px;
+        opacity: 0.7;
+        margin-top: 6px;
+        text-align: center;
     }
     </style>
     """,
@@ -232,10 +241,16 @@ mlb_meta = build_mlb_meta(MLB_PATH, os.path.getmtime(MLB_PATH)) if mlb_db else p
 # ============================================================
 MAX_LIVES = 5
 
-def normalize_name(s: str) -> str:
-    s = s.strip().lower()
+def strip_accents(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s)
     s = unicodedata.normalize("NFKD", s)
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return "".join(ch for ch in s if not unicodedata.combining(ch))
+
+def normalize_name(s: str) -> str:
+    s = strip_accents(s)
+    s = s.strip().lower()
     s = re.sub(r"[^a-z\s]", "", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
@@ -246,7 +261,7 @@ def calc_df_height(n_rows: int, row_px: int = 36, header_px: int = 40, min_px: i
 
 def render_lives(lives: int, max_lives: int = MAX_LIVES):
     filled = "❤️" * max(0, lives)
-    empty = "🤍" * max(0, max_lives - lives)  # silhouette-ish empty heart
+    empty = "🤍" * max(0, max_lives - lives)
     st.markdown(
         f"""
         <div class="lives-wrap">
@@ -277,6 +292,7 @@ def begin_round(pool):
     # per-player tracking
     st.session_state.attempts_this_player = 0
     st.session_state.had_incorrect_this_player = False
+
     st.session_state.feedback = ""
     st.session_state.show_overlay = False
     st.session_state.overlay_name = ""
@@ -392,6 +408,9 @@ st.sidebar.header("Eligible Players")
 # ============================================================
 pool = []
 
+nba_ids = []
+mlb_ids = []
+
 if use_nba and len(nba_meta):
     nba_g = pd.to_numeric(nba_meta["career_games"], errors="coerce").fillna(0).astype(int)
     nba_ids = nba_meta.loc[nba_g >= int(nba_min_games), "player_id"].tolist()
@@ -419,28 +438,36 @@ if not pool:
     st.stop()
 
 # ============================================================
-# Autocomplete options
+# Autocomplete options (FILTERED to toggles + current eligible pool)
 # ============================================================
 @st.cache_data
-def build_name_options(nba_meta: pd.DataFrame, mlb_meta: pd.DataFrame):
+def build_name_maps_from_ids(nba_meta: pd.DataFrame, mlb_meta: pd.DataFrame):
+    nba_map = {}
+    mlb_map = {}
+    if len(nba_meta):
+        nba_map = dict(zip(nba_meta["player_id"].astype(str), nba_meta["name"].astype(str)))
+    if len(mlb_meta):
+        mlb_map = dict(zip(mlb_meta["player_id"].astype(str), mlb_meta["name"].astype(str)))
+    return nba_map, mlb_map
+
+NBA_ID_TO_NAME, MLB_ID_TO_NAME = build_name_maps_from_ids(nba_meta, mlb_meta)
+
+def build_display_opts_from_pool(pool_local):
     display_to_name = {}
     opts = []
-
-    def add(meta: pd.DataFrame, league: str):
-        for n in meta["name"].dropna().astype(str).tolist():
-            disp = f"{n} ({league})"
-            if disp not in display_to_name:
-                display_to_name[disp] = n
-                opts.append(disp)
-
-    if len(nba_meta):
-        add(nba_meta, "NBA")
-    if len(mlb_meta):
-        add(mlb_meta, "MLB")
-
+    for lg, pid in pool_local:
+        if lg == "NBA":
+            raw = NBA_ID_TO_NAME.get(str(pid), "")
+        else:
+            raw = MLB_ID_TO_NAME.get(str(pid), "")
+        n_clean = strip_accents(raw)
+        disp = f"{n_clean} ({lg})"
+        if disp not in display_to_name:
+            display_to_name[disp] = n_clean
+            opts.append(disp)
     return sorted(opts), display_to_name
 
-ALL_DISPLAY_OPTS, DISPLAY_TO_NAME = build_name_options(nba_meta, mlb_meta)
+ALL_DISPLAY_OPTS, DISPLAY_TO_NAME = build_display_opts_from_pool(pool)
 
 # If filters/leagues change, reset the game cleanly
 current_settings_key = (use_nba, use_mlb, int(nba_min_games), int(mlb_min_games_h), float(mlb_min_ip_p))
@@ -464,7 +491,8 @@ league = st.session_state.league
 player_id = st.session_state.player_id
 
 record = nba_db[player_id] if league == "NBA" else mlb_db[player_id]
-answer_name = record.get("name", "")
+answer_name_raw = record.get("name", "")
+answer_name = strip_accents(answer_name_raw)  # displayed/revealed answer with no accents
 
 df = pd.DataFrame(record.get("per_game", []))
 
@@ -561,17 +589,20 @@ guess_display = st.selectbox(
 # - You MUST guess at least once.
 # - Skip is only allowed after at least 1 incorrect guess on this player.
 skip_allowed = bool(st.session_state.had_incorrect_this_player)
+skip_label = "Skip" if skip_allowed else "🔒 Skip"
 
 colA, colB = st.columns(2)
 submit = colA.button("Submit Guess", use_container_width=True)
-skip = colB.button("Skip", use_container_width=True, disabled=not skip_allowed)
+skip = colB.button(skip_label, use_container_width=True, disabled=not skip_allowed)
+
+if not skip_allowed:
+    colB.markdown('<div class="skip-locked-note">Unlocks after 1 wrong guess</div>', unsafe_allow_html=True)
 
 if submit:
     if not guess_display:
         st.session_state.feedback = "Pick a name from the dropdown 🙂"
         st.rerun()
 
-    # record that a guess happened for this player
     st.session_state.attempts_this_player += 1
 
     guess_name = DISPLAY_TO_NAME.get(guess_display, guess_display)
@@ -594,10 +625,10 @@ if submit:
             st.rerun()
 
 if skip:
-    # Skip costs NO lives, but only allowed after 1 incorrect guess
     st.session_state.streak = 0
     show_result_overlay(answer_name, "answer")
     st.rerun()
 
 if st.session_state.feedback:
     st.write(st.session_state.feedback)
+
