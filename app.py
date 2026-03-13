@@ -1,5 +1,4 @@
 import streamlit as st
-
 st.set_page_config(layout="wide")
 
 import json
@@ -142,16 +141,17 @@ def parse_ip(ip_val):
 def has_ip_column(rows):
     if not rows:
         return False
+    # pitchers tables will typically have IP
     return "IP" in rows[0]
 
 def career_games_from_rows(rows):
-    # Prefer 'Yrs' summary
     for row in rows:
         season = str(row.get("Season", ""))
         if "Yrs" in season:
             g = _to_int(row.get("G"))
             if g is not None:
                 return g
+
     total = 0
     found = False
     for row in rows:
@@ -164,13 +164,13 @@ def career_games_from_rows(rows):
     return total if found else None
 
 def career_ip_from_rows(rows):
-    # Prefer 'Yrs' summary
     for row in rows:
         season = str(row.get("Season", ""))
         if "Yrs" in season:
             ip = parse_ip(row.get("IP"))
             if ip is not None:
                 return ip
+
     total = 0.0
     found = False
     for row in rows:
@@ -229,7 +229,7 @@ def calc_df_height(n_rows: int, row_px: int = 36, header_px: int = 40, min_px: i
 def show_result_overlay(name: str, status: str):
     st.session_state.show_overlay = True
     st.session_state.overlay_name = name
-    st.session_state.overlay_status = status
+    st.session_state.overlay_status = status  # "correct" or "wrong"
 
 def get_new_pick(pool):
     return random.choice(pool)
@@ -260,53 +260,87 @@ if not use_nba and not use_mlb:
     st.stop()
 
 st.sidebar.divider()
-st.sidebar.header("Filters")
 
+# -----------------------
+# NBA Filters (slider max capped at median)
+# -----------------------
 nba_min_games = 0
+if use_nba and len(nba_meta):
+    st.sidebar.subheader("NBA Filters")
+
+    nba_vals = pd.to_numeric(nba_meta["career_games"], errors="coerce").fillna(0)
+    nba_median_g = int(nba_vals.median()) if len(nba_vals) else 0
+    nba_max = max(0, nba_median_g)
+
+    # CLAMP stored value to new max BEFORE widget creation
+    if "nba_games_slider" in st.session_state:
+        try:
+            st.session_state["nba_games_slider"] = min(int(st.session_state["nba_games_slider"]), nba_max)
+        except:
+            st.session_state["nba_games_slider"] = 0
+
+    nba_min_games = st.sidebar.slider(
+        "Minimum games played",
+        min_value=0,
+        max_value=nba_max,
+        value=int(st.session_state.get("nba_games_slider", 0)),
+        step=10,
+        key="nba_games_slider",
+    )
+
+# -----------------------
+# MLB Filters (hitters use games, pitchers use IP; max capped at median)
+# -----------------------
 mlb_min_games_h = 0
 mlb_min_ip_p = 0.0
 
-if use_nba and len(nba_meta):
-    nba_vals = pd.to_numeric(nba_meta["career_games"], errors="coerce").fillna(0)
-    # median as integer cap
-    nba_median_g = int(nba_vals.median()) if len(nba_vals) else 0
-    nba_min_games = st.sidebar.slider(
-        "NBA minimum games played",
-        min_value=0,
-        max_value=max(0, nba_median_g),
-        value=0,
-        step=10
-    )
-    st.sidebar.caption(f"Median NBA career games (slider max): {nba_median_g}")
-
 if use_mlb and len(mlb_meta):
-    # hitters: games
+    st.sidebar.subheader("MLB Filters")
+
+    # Hitters
     hitters = mlb_meta[mlb_meta["mlb_type"] == "hitter"].copy()
     hitters_vals = pd.to_numeric(hitters["career_g"], errors="coerce").fillna(0)
     hitters_median_g = int(hitters_vals.median()) if len(hitters_vals) else 0
+    hitters_max = max(0, hitters_median_g)
+
+    if "mlb_hitters_slider" in st.session_state:
+        try:
+            st.session_state["mlb_hitters_slider"] = min(int(st.session_state["mlb_hitters_slider"]), hitters_max)
+        except:
+            st.session_state["mlb_hitters_slider"] = 0
 
     mlb_min_games_h = st.sidebar.slider(
-        "MLB hitters: minimum games played",
+        "Hitters: minimum games played",
         min_value=0,
-        max_value=max(0, hitters_median_g),
-        value=0,
-        step=10
+        max_value=hitters_max,
+        value=int(st.session_state.get("mlb_hitters_slider", 0)),
+        step=10,
+        key="mlb_hitters_slider",
     )
-    st.sidebar.caption(f"Median MLB hitter games (slider max): {hitters_median_g}")
 
-    # pitchers: IP
+    # Pitchers
     pitchers = mlb_meta[mlb_meta["mlb_type"] == "pitcher"].copy()
     pitchers_vals = pd.to_numeric(pitchers["career_ip"], errors="coerce").fillna(0.0)
     pitchers_median_ip = float(pitchers_vals.median()) if len(pitchers_vals) else 0.0
+    pitchers_max = float(max(0.0, pitchers_median_ip))
+
+    if "mlb_pitchers_slider" in st.session_state:
+        try:
+            st.session_state["mlb_pitchers_slider"] = min(float(st.session_state["mlb_pitchers_slider"]), pitchers_max)
+        except:
+            st.session_state["mlb_pitchers_slider"] = 0.0
 
     mlb_min_ip_p = st.sidebar.slider(
-        "MLB pitchers: minimum innings pitched",
+        "Pitchers: minimum innings pitched",
         min_value=0.0,
-        max_value=max(0.0, pitchers_median_ip),
-        value=0.0,
-        step=10.0
+        max_value=pitchers_max,
+        value=float(st.session_state.get("mlb_pitchers_slider", 0.0)),
+        step=10.0,
+        key="mlb_pitchers_slider",
     )
-    st.sidebar.caption(f"Median MLB pitcher IP (slider max): {int(pitchers_median_ip)}")
+
+st.sidebar.divider()
+st.sidebar.header("Eligible Players")
 
 # -----------------------
 # Build eligible pool
@@ -315,18 +349,18 @@ pool = []
 
 if use_nba and len(nba_meta):
     nba_g = pd.to_numeric(nba_meta["career_games"], errors="coerce").fillna(0).astype(int)
-    nba_ids = nba_meta.loc[nba_g >= nba_min_games, "player_id"].tolist()
+    nba_ids = nba_meta.loc[nba_g >= int(nba_min_games), "player_id"].tolist()
     pool.extend([("NBA", pid) for pid in nba_ids])
     st.sidebar.caption(f"Eligible NBA players: {len(nba_ids)}")
 
 if use_mlb and len(mlb_meta):
     hitters = mlb_meta[mlb_meta["mlb_type"] == "hitter"].copy()
     hitters_g = pd.to_numeric(hitters["career_g"], errors="coerce").fillna(0).astype(int)
-    hitter_ids = hitters.loc[hitters_g >= mlb_min_games_h, "player_id"].tolist()
+    hitter_ids = hitters.loc[hitters_g >= int(mlb_min_games_h), "player_id"].tolist()
 
     pitchers = mlb_meta[mlb_meta["mlb_type"] == "pitcher"].copy()
     pitchers_ip = pd.to_numeric(pitchers["career_ip"], errors="coerce").fillna(0.0).astype(float)
-    pitcher_ids = pitchers.loc[pitchers_ip >= mlb_min_ip_p, "player_id"].tolist()
+    pitcher_ids = pitchers.loc[pitchers_ip >= float(mlb_min_ip_p), "player_id"].tolist()
 
     mlb_ids = hitter_ids + pitcher_ids
     pool.extend([("MLB", pid) for pid in mlb_ids])
@@ -490,4 +524,3 @@ if skip:
 
 if st.session_state.feedback:
     st.write(st.session_state.feedback)
-
