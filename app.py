@@ -8,9 +8,9 @@ import re
 import unicodedata
 import os
 
-# -----------------------
+# ============================================================
 # Styling
-# -----------------------
+# ============================================================
 st.markdown(
     """
     <style>
@@ -64,21 +64,38 @@ st.markdown(
 
     div[data-testid="answer-next-btn"] {
         position: fixed !important;
-        top: calc(50% + 110px) !important;
+        top: calc(50% + 120px) !important;
         left: 50% !important;
         transform: translateX(-50%) !important;
         width: min(260px, 60vw) !important;
         z-index: 10000 !important;
         pointer-events: auto !important;
     }
+
+    .lives-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding-top: 4px;
+    }
+    .lives-label {
+        font-size: 14px;
+        opacity: 0.85;
+    }
+    .lives-hearts {
+        font-size: 26px;
+        line-height: 1;
+        letter-spacing: 4px;
+        user-select: none;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# -----------------------
+# ============================================================
 # Load database
-# -----------------------
+# ============================================================
 @st.cache_data
 def load_db(path: str):
     with open(path, "r", encoding="utf-8") as f:
@@ -90,9 +107,9 @@ MLB_PATH = "mlb.json"
 nba_db = load_db(NBA_PATH) if os.path.exists(NBA_PATH) else {}
 mlb_db = load_db(MLB_PATH) if os.path.exists(MLB_PATH) else {}
 
-# -----------------------
+# ============================================================
 # Fast metadata layer (speeds up filtering + list building)
-# -----------------------
+# ============================================================
 def _to_float(x):
     try:
         if x is None:
@@ -141,7 +158,6 @@ def parse_ip(ip_val):
 def has_ip_column(rows):
     if not rows:
         return False
-    # pitchers tables will typically have IP
     return "IP" in rows[0]
 
 def career_games_from_rows(rows):
@@ -211,9 +227,11 @@ def build_mlb_meta(path: str, file_mtime: float) -> pd.DataFrame:
 nba_meta = build_nba_meta(NBA_PATH, os.path.getmtime(NBA_PATH)) if nba_db else pd.DataFrame(columns=["player_id","name","career_games"])
 mlb_meta = build_mlb_meta(MLB_PATH, os.path.getmtime(MLB_PATH)) if mlb_db else pd.DataFrame(columns=["player_id","name","mlb_type","career_g","career_ip"])
 
-# -----------------------
+# ============================================================
 # Helpers
-# -----------------------
+# ============================================================
+MAX_LIVES = 5
+
 def normalize_name(s: str) -> str:
     s = s.strip().lower()
     s = unicodedata.normalize("NFKD", s)
@@ -226,10 +244,27 @@ def calc_df_height(n_rows: int, row_px: int = 36, header_px: int = 40, min_px: i
     h = header_px + n_rows * row_px
     return max(min_px, min(h, max_px))
 
+def render_lives(lives: int, max_lives: int = MAX_LIVES):
+    filled = "❤️" * max(0, lives)
+    empty = "🤍" * max(0, max_lives - lives)  # silhouette-ish empty heart
+    st.markdown(
+        f"""
+        <div class="lives-wrap">
+          <div class="lives-label">Lives:</div>
+          <div class="lives-hearts">{filled}{empty}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def show_result_overlay(name: str, status: str):
     st.session_state.show_overlay = True
     st.session_state.overlay_name = name
-    st.session_state.overlay_status = status  # "correct" or "wrong"
+    st.session_state.overlay_status = status  # "correct" | "answer"
+
+def show_game_over_overlay():
+    st.session_state.game_over = True
+    st.session_state.show_overlay = False
 
 def get_new_pick(pool):
     return random.choice(pool)
@@ -238,18 +273,31 @@ def begin_round(pool):
     league, pid = get_new_pick(pool)
     st.session_state.league = league
     st.session_state.player_id = pid
-    st.session_state.guesses_left = 3
+
+    # per-player tracking
+    st.session_state.attempts_this_player = 0
+    st.session_state.had_incorrect_this_player = False
     st.session_state.feedback = ""
     st.session_state.show_overlay = False
+    st.session_state.overlay_name = ""
+    st.session_state.overlay_status = ""
     st.session_state.guess_choice = ""
 
 def next_round(pool):
     st.session_state.round += 1
     begin_round(pool)
 
-# -----------------------
+def reset_game(pool):
+    st.session_state.score = 0
+    st.session_state.streak = 0
+    st.session_state.round = 1
+    st.session_state.lives = MAX_LIVES
+    st.session_state.game_over = False
+    begin_round(pool)
+
+# ============================================================
 # Sidebar: league selection + filters
-# -----------------------
+# ============================================================
 st.sidebar.header("Leagues")
 
 use_nba = st.sidebar.checkbox("NBA", value=True, disabled=not bool(nba_db))
@@ -272,7 +320,6 @@ if use_nba and len(nba_meta):
     nba_median_g = int(nba_vals.median()) if len(nba_vals) else 0
     nba_max = max(0, nba_median_g)
 
-    # CLAMP stored value to new max BEFORE widget creation
     if "nba_games_slider" in st.session_state:
         try:
             st.session_state["nba_games_slider"] = min(int(st.session_state["nba_games_slider"]), nba_max)
@@ -297,7 +344,6 @@ mlb_min_ip_p = 0.0
 if use_mlb and len(mlb_meta):
     st.sidebar.subheader("MLB Filters")
 
-    # Hitters
     hitters = mlb_meta[mlb_meta["mlb_type"] == "hitter"].copy()
     hitters_vals = pd.to_numeric(hitters["career_g"], errors="coerce").fillna(0)
     hitters_median_g = int(hitters_vals.median()) if len(hitters_vals) else 0
@@ -318,7 +364,6 @@ if use_mlb and len(mlb_meta):
         key="mlb_hitters_slider",
     )
 
-    # Pitchers
     pitchers = mlb_meta[mlb_meta["mlb_type"] == "pitcher"].copy()
     pitchers_vals = pd.to_numeric(pitchers["career_ip"], errors="coerce").fillna(0.0)
     pitchers_median_ip = float(pitchers_vals.median()) if len(pitchers_vals) else 0.0
@@ -342,9 +387,9 @@ if use_mlb and len(mlb_meta):
 st.sidebar.divider()
 st.sidebar.header("Eligible Players")
 
-# -----------------------
+# ============================================================
 # Build eligible pool
-# -----------------------
+# ============================================================
 pool = []
 
 if use_nba and len(nba_meta):
@@ -373,9 +418,9 @@ if not pool:
     st.sidebar.error("No players match your current filters.")
     st.stop()
 
-# -----------------------
+# ============================================================
 # Autocomplete options
-# -----------------------
+# ============================================================
 @st.cache_data
 def build_name_options(nba_meta: pd.DataFrame, mlb_meta: pd.DataFrame):
     display_to_name = {}
@@ -404,19 +449,16 @@ if "last_settings_key" not in st.session_state:
 
 if current_settings_key != st.session_state.last_settings_key:
     st.session_state.last_settings_key = current_settings_key
-    st.session_state.score = 0
-    st.session_state.streak = 0
-    st.session_state.round = 1
-    begin_round(pool)
+    reset_game(pool)
 
-# -----------------------
+# ============================================================
 # Session state init
-# -----------------------
+# ============================================================
 if "round" not in st.session_state:
-    st.session_state.score = 0
-    st.session_state.streak = 0
-    st.session_state.round = 1
-    begin_round(pool)
+    reset_game(pool)
+
+if "game_over" not in st.session_state:
+    st.session_state.game_over = False
 
 league = st.session_state.league
 player_id = st.session_state.player_id
@@ -432,23 +474,48 @@ df = df.replace("None", pd.NA).dropna(how="all")
 df = df.reset_index(drop=True)
 df_height = calc_df_height(len(df))
 
-# -----------------------
+# ============================================================
 # UI
-# -----------------------
+# ============================================================
 st.title("🏀⚾ Stathead Game")
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1.4])
 c1.metric("League", league)
 c2.metric("Round", st.session_state.round)
 c3.metric("Score", st.session_state.score)
 c4.metric("Streak", st.session_state.streak)
-c5.metric("Guesses Left", st.session_state.guesses_left)
+with c5:
+    render_lives(st.session_state.lives, MAX_LIVES)
 
 st.dataframe(df, use_container_width=True, height=df_height, hide_index=True)
 
-# -----------------------
-# Overlay
-# -----------------------
+# ============================================================
+# GAME OVER overlay
+# ============================================================
+if st.session_state.game_over:
+    st.markdown('<div class="overlay"></div>', unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="modal" style="background: rgba(255, 255, 255, 0.98);">
+          <div class="modal-title">Game Over</div>
+          <div class="modal-answer">Final Score: {st.session_state.score}</div>
+          <div class="modal-sub">You ran out of lives.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    btn_holder = st.container()
+    btn_holder.markdown('<div data-testid="answer-next-btn">', unsafe_allow_html=True)
+    if st.button("Play Again", use_container_width=True):
+        reset_game(pool)
+        st.rerun()
+    btn_holder.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
+
+# ============================================================
+# Answer/Correct overlay (between players)
+# ============================================================
 if st.session_state.show_overlay:
     if st.session_state.overlay_status == "correct":
         bg = "rgba(46, 255, 12, 0.97)"
@@ -480,9 +547,9 @@ if st.session_state.show_overlay:
 
     st.stop()
 
-# -----------------------
+# ============================================================
 # Controls (Autocomplete dropdown)
-# -----------------------
+# ============================================================
 guess_display = st.selectbox(
     "Guess the player (type to search)",
     options=[""] + ALL_DISPLAY_OPTS,
@@ -490,14 +557,22 @@ guess_display = st.selectbox(
     key="guess_choice",
 )
 
+# Skip rules:
+# - You MUST guess at least once.
+# - Skip is only allowed after at least 1 incorrect guess on this player.
+skip_allowed = bool(st.session_state.had_incorrect_this_player)
+
 colA, colB = st.columns(2)
 submit = colA.button("Submit Guess", use_container_width=True)
-skip = colB.button("Skip", use_container_width=True)
+skip = colB.button("Skip", use_container_width=True, disabled=not skip_allowed)
 
 if submit:
     if not guess_display:
         st.session_state.feedback = "Pick a name from the dropdown 🙂"
         st.rerun()
+
+    # record that a guess happened for this player
+    st.session_state.attempts_this_player += 1
 
     guess_name = DISPLAY_TO_NAME.get(guess_display, guess_display)
 
@@ -507,19 +582,21 @@ if submit:
         show_result_overlay(answer_name, "correct")
         st.rerun()
     else:
-        st.session_state.guesses_left -= 1
+        st.session_state.lives -= 1
         st.session_state.streak = 0
+        st.session_state.had_incorrect_this_player = True
 
-        if st.session_state.guesses_left > 0:
-            st.session_state.feedback = f"❌ Incorrect. ({st.session_state.guesses_left} left)"
+        if st.session_state.lives <= 0:
+            show_game_over_overlay()
             st.rerun()
         else:
-            show_result_overlay(answer_name, "wrong")
+            st.session_state.feedback = f"❌ Incorrect. {st.session_state.lives} lives remaining."
             st.rerun()
 
 if skip:
+    # Skip costs NO lives, but only allowed after 1 incorrect guess
     st.session_state.streak = 0
-    show_result_overlay(answer_name, "wrong")
+    show_result_overlay(answer_name, "answer")
     st.rerun()
 
 if st.session_state.feedback:
