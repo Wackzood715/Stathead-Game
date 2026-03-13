@@ -1,4 +1,5 @@
 import streamlit as st
+
 st.set_page_config(layout="wide")
 
 import json
@@ -259,67 +260,53 @@ if not use_nba and not use_mlb:
     st.stop()
 
 st.sidebar.divider()
+st.sidebar.header("Filters")
 
-# -----------------------
-# NBA Filters
-# -----------------------
+nba_min_games = 0
+mlb_min_games_h = 0
+mlb_min_ip_p = 0.0
+
 if use_nba and len(nba_meta):
-    st.sidebar.subheader("NBA Filters")
-
     nba_vals = pd.to_numeric(nba_meta["career_games"], errors="coerce").fillna(0)
+    # median as integer cap
     nba_median_g = int(nba_vals.median()) if len(nba_vals) else 0
-
     nba_min_games = st.sidebar.slider(
-        "Minimum games played",
+        "NBA minimum games played",
         min_value=0,
         max_value=max(0, nba_median_g),
         value=0,
-        step=10,
-        key="nba_games_slider"
+        step=10
     )
-else:
-    nba_min_games = 0
+    st.sidebar.caption(f"Median NBA career games (slider max): {nba_median_g}")
 
-
-# -----------------------
-# MLB Filters
-# -----------------------
 if use_mlb and len(mlb_meta):
-    st.sidebar.subheader("MLB Filters")
-
-    # ----- Hitters -----
+    # hitters: games
     hitters = mlb_meta[mlb_meta["mlb_type"] == "hitter"].copy()
     hitters_vals = pd.to_numeric(hitters["career_g"], errors="coerce").fillna(0)
     hitters_median_g = int(hitters_vals.median()) if len(hitters_vals) else 0
 
     mlb_min_games_h = st.sidebar.slider(
-        "Hitters: minimum games played",
+        "MLB hitters: minimum games played",
         min_value=0,
         max_value=max(0, hitters_median_g),
         value=0,
-        step=10,
-        key="mlb_hitters_slider"
+        step=10
     )
+    st.sidebar.caption(f"Median MLB hitter games (slider max): {hitters_median_g}")
 
-    # ----- Pitchers -----
+    # pitchers: IP
     pitchers = mlb_meta[mlb_meta["mlb_type"] == "pitcher"].copy()
     pitchers_vals = pd.to_numeric(pitchers["career_ip"], errors="coerce").fillna(0.0)
     pitchers_median_ip = float(pitchers_vals.median()) if len(pitchers_vals) else 0.0
 
     mlb_min_ip_p = st.sidebar.slider(
-        "Pitchers: minimum innings pitched",
+        "MLB pitchers: minimum innings pitched",
         min_value=0.0,
         max_value=max(0.0, pitchers_median_ip),
         value=0.0,
-        step=10.0,
-        key="mlb_pitchers_slider"
+        step=10.0
     )
-else:
-    mlb_min_games_h = 0
-    mlb_min_ip_p = 0.0
-
-st.sidebar.divider()
-st.sidebar.header("Eligible Players")
+    st.sidebar.caption(f"Median MLB pitcher IP (slider max): {int(pitchers_median_ip)}")
 
 # -----------------------
 # Build eligible pool
@@ -503,3 +490,4 @@ if skip:
 
 if st.session_state.feedback:
     st.write(st.session_state.feedback)
+
