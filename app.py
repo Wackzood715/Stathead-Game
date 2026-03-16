@@ -906,7 +906,7 @@ if st.session_state.game_over:
           <div class="modal-title">Game Over</div>
           <div class="modal-answer">Final Score: {score}</div>
           <div class="modal-sub">Accuracy: {pct_correct:.1f}% ({score}/{rounds_played})</div>
-          <div class="modal-sub">Players used this run: {len(rounds_played)}</div>
+          <div class="modal-sub">Players used this run: {len(st.session_state.get("used_player_keys", set()))} / {len(pool)}</div>
           <div class="modal-sub">You ran out of lives.</div>
         </div>
         """,
