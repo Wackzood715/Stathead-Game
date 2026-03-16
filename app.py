@@ -399,21 +399,37 @@ def show_game_over_overlay():
     st.session_state.game_over = True
     st.session_state.show_overlay = False
 
+def make_player_key(league: str, pid: str) -> str:
+    return f"{league}::{pid}"
+
+def get_unused_pool(pool):
+    used = st.session_state.get("used_player_keys", set())
+    return [p for p in pool if make_player_key(p[0], p[1]) not in used]
+
 def get_new_pick(pool):
-    if not pool:
+    available = get_unused_pool(pool)
+    if not available:
         return None
-    return random.choice(pool)
+    return random.choice(available)
 
 def begin_round(pool):
     pick = get_new_pick(pool)
     if pick is None:
         st.session_state.player_id = None
         st.session_state.league = None
+        st.session_state.attempts_this_player = 0
+        st.session_state.had_incorrect_this_player = False
+        st.session_state.feedback = ""
+        st.session_state.show_overlay = False
+        st.session_state.overlay_name = ""
+        st.session_state.overlay_status = ""
+        st.session_state.guess_choice = ""
         return
 
     league, pid = pick
     st.session_state.league = league
     st.session_state.player_id = pid
+    st.session_state.used_player_keys.add(make_player_key(league, pid))
     st.session_state.attempts_this_player = 0
     st.session_state.had_incorrect_this_player = False
     st.session_state.feedback = ""
@@ -432,6 +448,7 @@ def reset_game(pool):
     st.session_state.round = 1
     st.session_state.lives = MAX_LIVES
     st.session_state.game_over = False
+    st.session_state.used_player_keys = set()
     begin_round(pool)
 
 def render_checkbox_grid(container, values, key_prefix, selected_out, filters_locked, cols_per_row=4):
@@ -470,6 +487,9 @@ if "round" not in st.session_state:
     st.session_state.guess_choice = ""
     st.session_state.attempts_this_player = 0
     st.session_state.had_incorrect_this_player = False
+
+if "used_player_keys" not in st.session_state:
+    st.session_state.used_player_keys = set()
 
 # ============================================================
 # Sidebar: league selection + filters
@@ -515,6 +535,7 @@ st.sidebar.divider()
 # -----------------------
 # NBA Filters
 # -----------------------
+
 nba_min_games = 0
 selected_nba_teams = []
 
@@ -767,12 +788,25 @@ if not pool:
 if "player_id" not in st.session_state or "league" not in st.session_state:
     begin_round(pool)
 else:
-    current_tuple = (st.session_state.get("league"), st.session_state.get("player_id"))
+    current_league = st.session_state.get("league")
+    current_pid = st.session_state.get("player_id")
+    current_tuple = (current_league, current_pid)
+
     if current_tuple not in pool:
         begin_round(pool)
+    else:
+        current_key = make_player_key(current_league, current_pid)
+        if current_key not in st.session_state.used_player_keys:
+            st.session_state.used_player_keys.add(current_key)
+
+unused_pool = get_unused_pool(pool)
 
 if not st.session_state.get("player_id") or not st.session_state.get("league"):
-    st.sidebar.error("No players match your current filters.")
+    st.markdown("### There are no more left. Maybe stop being such a baby and expand the filters a little. Challenge yourself.")
+    st.write(f"Players used this run: {len(st.session_state.get('used_player_keys', set()))} / {len(pool)}")
+    if st.button("Play Again", use_container_width=True):
+        reset_game(pool)
+        st.rerun()
     st.stop()
 
 # ============================================================
@@ -845,13 +879,15 @@ df_height = calc_df_height(len(df))
 # ============================================================
 st.title("🏀⚾🏈 Stathead Game")
 
-c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1.4])
+c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1, 1, 1.4, 1.4])
 c1.metric("League", league)
 c2.metric("Round", st.session_state.round)
 c3.metric("Score", st.session_state.score)
 c4.metric("Streak", st.session_state.streak)
 with c5:
     render_lives(st.session_state.lives, MAX_LIVES)
+with c6:
+    st.metric("Players Left", len(unused_pool))
 
 st.dataframe(df, use_container_width=True, height=df_height, hide_index=True)
 
@@ -870,6 +906,7 @@ if st.session_state.game_over:
           <div class="modal-title">Game Over</div>
           <div class="modal-answer">Final Score: {score}</div>
           <div class="modal-sub">Accuracy: {pct_correct:.1f}% ({score}/{rounds_played})</div>
+          <div class="modal-sub">Players used this run: {len(rounds_played)}</div>
           <div class="modal-sub">You ran out of lives.</div>
         </div>
         """,
