@@ -97,6 +97,11 @@ st.markdown(
         margin-top: 6px;
         text-align: center;
     }
+
+    .filter-btn-row {
+        display: flex;
+        gap: 8px;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -451,26 +456,6 @@ def reset_game(pool):
     st.session_state.used_player_keys = set()
     begin_round(pool)
 
-def render_checkbox_grid(container, values, key_prefix, selected_out, filters_locked, cols_per_row=4):
-    for val in values:
-        key = f"{key_prefix}_{val}"
-        if key not in st.session_state:
-            st.session_state[key] = True
-
-    for i in range(0, len(values), cols_per_row):
-        row_values = values[i:i + cols_per_row]
-        cols = container.columns(cols_per_row)
-
-        for j, val in enumerate(row_values):
-            with cols[j]:
-                checked = st.checkbox(
-                    val,
-                    key=f"{key_prefix}_{val}",
-                    disabled=filters_locked,
-                )
-                if checked:
-                    selected_out.append(val)
-
 # ============================================================
 # Session state init
 # ============================================================
@@ -491,318 +476,373 @@ if "round" not in st.session_state:
 if "used_player_keys" not in st.session_state:
     st.session_state.used_player_keys = set()
 
-# ============================================================
-# Sidebar: league selection + filters
-# ============================================================
-filters_locked = st.session_state.get("round", 1) > 1
+if "filters_applied" not in st.session_state:
+    st.session_state.filters_applied = False
 
-st.sidebar.header("Leagues")
+if "applied_use_nba" not in st.session_state:
+    st.session_state.applied_use_nba = True
 
-default_use_nba = st.session_state.get("use_nba", True)
-default_use_mlb = st.session_state.get("use_mlb", bool(mlb_db))
-default_use_nfl = st.session_state.get("use_nfl", bool(nfl_db))
+if "applied_use_mlb" not in st.session_state:
+    st.session_state.applied_use_mlb = bool(mlb_db)
 
-use_nba = st.sidebar.checkbox(
-    "NBA",
-    value=default_use_nba,
-    key="use_nba",
-    disabled=(not bool(nba_db)) or filters_locked,
-)
+if "applied_use_nfl" not in st.session_state:
+    st.session_state.applied_use_nfl = bool(nfl_db)
 
-use_mlb = st.sidebar.checkbox(
-    "MLB",
-    value=default_use_mlb,
-    key="use_mlb",
-    disabled=(not bool(mlb_db)) or filters_locked,
-)
+if "applied_nba_min_games" not in st.session_state:
+    st.session_state.applied_nba_min_games = 0
 
-use_nfl = st.sidebar.checkbox(
-    "NFL",
-    value=default_use_nfl,
-    key="use_nfl",
-    disabled=(not bool(nfl_db)) or filters_locked,
-)
+if "applied_selected_nba_teams" not in st.session_state:
+    st.session_state.applied_selected_nba_teams = sorted(ALLOWED_NBA_TEAMS)
 
-if not use_nba and not use_mlb and not use_nfl:
-    st.sidebar.error("Select at least one league.")
-    st.stop()
+if "applied_mlb_min_games_h" not in st.session_state:
+    st.session_state.applied_mlb_min_games_h = 0
 
-if filters_locked:
-    st.sidebar.info("Filters are locked during an active run. Finish the game or restart to change them.")
+if "applied_mlb_min_ip_p" not in st.session_state:
+    st.session_state.applied_mlb_min_ip_p = 0.0
 
-st.sidebar.divider()
+if "applied_selected_mlb_teams" not in st.session_state:
+    st.session_state.applied_selected_mlb_teams = sorted(ALLOWED_MLB_TEAMS)
 
-# -----------------------
-# NBA Filters
-# -----------------------
+if "applied_nfl_min_games" not in st.session_state:
+    st.session_state.applied_nfl_min_games = 0
 
-nba_min_games = 0
-selected_nba_teams = []
-
-if use_nba and len(nba_meta):
-    st.sidebar.subheader("NBA Filters")
-
-    nba_vals = pd.to_numeric(nba_meta["career_games"], errors="coerce").fillna(0)
-    nba_median_g = int(nba_vals.median()) if len(nba_vals) else 0
-    nba_max = max(0, nba_median_g)
-
-    if "nba_games_slider" in st.session_state:
-        try:
-            st.session_state["nba_games_slider"] = min(int(st.session_state["nba_games_slider"]), nba_max)
-        except:
-            st.session_state["nba_games_slider"] = 0
-
-    nba_min_games = st.sidebar.slider(
-        "Minimum games played",
-        min_value=0,
-        max_value=nba_max,
-        value=int(st.session_state.get("nba_games_slider", 0)),
-        step=10,
-        key="nba_games_slider",
-        disabled=filters_locked,
-    )
-
-    all_nba_teams = sorted(ALLOWED_NBA_TEAMS)
-
-    nba_team_expander = st.sidebar.expander("Teams", expanded=False)
-    with nba_team_expander:
-        render_checkbox_grid(
-            container=nba_team_expander,
-            values=all_nba_teams,
-            key_prefix="nba_team",
-            selected_out=selected_nba_teams,
-            filters_locked=filters_locked,
-            cols_per_row=4,
-        )
-
-# -----------------------
-# MLB Filters
-# -----------------------
-mlb_min_games_h = 0
-mlb_min_ip_p = 0.0
-selected_mlb_teams = []
-
-if use_mlb and len(mlb_meta):
-    st.sidebar.subheader("MLB Filters")
-
-    hitters = mlb_meta[mlb_meta["mlb_type"] == "hitter"].copy()
-    hitters_vals = pd.to_numeric(hitters["career_g"], errors="coerce").fillna(0)
-    hitters_median_g = int(hitters_vals.median()) if len(hitters_vals) else 0
-    hitters_max = max(0, hitters_median_g)
-
-    if "mlb_hitters_slider" in st.session_state:
-        try:
-            st.session_state["mlb_hitters_slider"] = min(int(st.session_state["mlb_hitters_slider"]), hitters_max)
-        except:
-            st.session_state["mlb_hitters_slider"] = 0
-
-    mlb_min_games_h = st.sidebar.slider(
-        "Hitters: minimum games played",
-        min_value=0,
-        max_value=hitters_max,
-        value=int(st.session_state.get("mlb_hitters_slider", 0)),
-        step=10,
-        key="mlb_hitters_slider",
-        disabled=filters_locked,
-    )
-
-    pitchers = mlb_meta[mlb_meta["mlb_type"] == "pitcher"].copy()
-    pitchers_vals = pd.to_numeric(pitchers["career_ip"], errors="coerce").fillna(0.0)
-    pitchers_median_ip = float(pitchers_vals.median()) if len(pitchers_vals) else 0.0
-    pitchers_max = float(max(0.0, pitchers_median_ip))
-
-    if "mlb_pitchers_slider" in st.session_state:
-        try:
-            st.session_state["mlb_pitchers_slider"] = min(float(st.session_state["mlb_pitchers_slider"]), pitchers_max)
-        except:
-            st.session_state["mlb_pitchers_slider"] = 0.0
-
-    mlb_min_ip_p = st.sidebar.slider(
-        "Pitchers: minimum innings pitched",
-        min_value=0.0,
-        max_value=pitchers_max,
-        value=float(st.session_state.get("mlb_pitchers_slider", 0.0)),
-        step=10.0,
-        key="mlb_pitchers_slider",
-        disabled=filters_locked,
-    )
-
-    all_mlb_teams = sorted(ALLOWED_MLB_TEAMS)
-
-    mlb_team_expander = st.sidebar.expander("Teams", expanded=False)
-    with mlb_team_expander:
-        render_checkbox_grid(
-            container=mlb_team_expander,
-            values=all_mlb_teams,
-            key_prefix="mlb_team",
-            selected_out=selected_mlb_teams,
-            filters_locked=filters_locked,
-            cols_per_row=4,
-        )
-
-# -----------------------
-# NFL Filters
-# -----------------------
-nfl_min_games = 0
-selected_nfl_positions = []
-selected_nfl_teams = []
-
-if use_nfl and len(nfl_meta):
-    st.sidebar.subheader("NFL Filters")
-
-    nfl_vals = pd.to_numeric(nfl_meta["career_games"], errors="coerce").fillna(0)
-    nfl_median_g = int(nfl_vals.median()) if len(nfl_vals) else 0
-    nfl_max = max(0, nfl_median_g)
-
-    if "nfl_games_slider" in st.session_state:
-        try:
-            st.session_state["nfl_games_slider"] = min(int(st.session_state["nfl_games_slider"]), nfl_max)
-        except:
-            st.session_state["nfl_games_slider"] = 0
-
-    nfl_min_games = st.sidebar.slider(
-        "Minimum games played",
-        min_value=0,
-        max_value=nfl_max,
-        value=int(st.session_state.get("nfl_games_slider", 0)),
-        step=10,
-        key="nfl_games_slider",
-        disabled=filters_locked,
-    )
-
-    all_nfl_positions = sorted(
+if "applied_selected_nfl_positions" not in st.session_state:
+    st.session_state.applied_selected_nfl_positions = sorted(
         {
             pos
             for pos_list in nfl_meta["positions"].tolist()
             for pos in (pos_list if isinstance(pos_list, list) else [])
             if is_valid_nfl_position(pos)
         }
+    ) if len(nfl_meta) else []
+
+if "applied_selected_nfl_teams" not in st.session_state:
+    st.session_state.applied_selected_nfl_teams = sorted(ALLOWED_NFL_TEAMS)
+
+if "form_selected_nba_teams" not in st.session_state:
+    st.session_state.form_selected_nba_teams = st.session_state.applied_selected_nba_teams.copy()
+
+if "form_selected_mlb_teams" not in st.session_state:
+    st.session_state.form_selected_mlb_teams = st.session_state.applied_selected_mlb_teams.copy()
+
+if "form_selected_nfl_positions" not in st.session_state:
+    st.session_state.form_selected_nfl_positions = st.session_state.applied_selected_nfl_positions.copy()
+
+if "form_selected_nfl_teams" not in st.session_state:
+    st.session_state.form_selected_nfl_teams = st.session_state.applied_selected_nfl_teams.copy()
+
+filters_locked = st.session_state.get("round", 1) > 1
+
+# ============================================================
+# Sidebar: league selection + filters form
+# ============================================================
+st.sidebar.header("Leagues")
+
+if filters_locked:
+    st.sidebar.info("Filters are locked during an active run. Finish the game or restart to change them.")
+
+with st.sidebar.form("filters_form"):
+    form_use_nba = st.checkbox(
+        "NBA",
+        value=st.session_state.applied_use_nba,
+        disabled=(not bool(nba_db)) or filters_locked,
     )
 
-    all_nfl_teams = sorted(ALLOWED_NFL_TEAMS)
+    form_use_mlb = st.checkbox(
+        "MLB",
+        value=st.session_state.applied_use_mlb,
+        disabled=(not bool(mlb_db)) or filters_locked,
+    )
 
-    nfl_pos_expander = st.sidebar.expander("Positions", expanded=False)
-    with nfl_pos_expander:
-        render_checkbox_grid(
-            container=nfl_pos_expander,
-            values=all_nfl_positions,
-            key_prefix="nfl_pos",
-            selected_out=selected_nfl_positions,
-            filters_locked=filters_locked,
-            cols_per_row=4,
+    form_use_nfl = st.checkbox(
+        "NFL",
+        value=st.session_state.applied_use_nfl,
+        disabled=(not bool(nfl_db)) or filters_locked,
+    )
+
+    if not form_use_nba and not form_use_mlb and not form_use_nfl:
+        st.warning("Select at least one league.")
+
+    st.markdown("---")
+
+    # -----------------------
+    # NBA Filters
+    # -----------------------
+
+    nba_min_games_form = 0
+
+    if form_use_nba and len(nba_meta):
+        st.subheader("NBA Filters")
+
+        nba_vals = pd.to_numeric(nba_meta["career_games"], errors="coerce").fillna(0)
+        nba_median_g = int(nba_vals.median()) if len(nba_vals) else 0
+        nba_max = max(0, nba_median_g)
+
+        nba_min_games_form = st.slider(
+            "Minimum games played",
+            min_value=0,
+            max_value=nba_max,
+            value=min(int(st.session_state.applied_nba_min_games), nba_max),
+            step=10,
+            disabled=filters_locked,
         )
 
-    nfl_team_expander = st.sidebar.expander("Teams", expanded=False)
-    with nfl_team_expander:
-        render_checkbox_grid(
-            container=nfl_team_expander,
-            values=all_nfl_teams,
-            key_prefix="nfl_team",
-            selected_out=selected_nfl_teams,
-            filters_locked=filters_locked,
-            cols_per_row=4,
+        all_nba_teams = sorted(ALLOWED_NBA_TEAMS)
+
+        st.markdown("**Teams**")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.form_submit_button("Select All NBA Teams", use_container_width=True, disabled=filters_locked):
+                st.session_state.form_selected_nba_teams = all_nba_teams.copy()
+        with c2:
+            if st.form_submit_button("Select None NBA Teams", use_container_width=True, disabled=filters_locked):
+                st.session_state.form_selected_nba_teams = []
+
+        selected_nba_teams_form = st.multiselect(
+            "NBA Teams",
+            options=all_nba_teams,
+            key="form_selected_nba_teams",
+            disabled=filters_locked,
         )
 
-st.sidebar.divider()
-st.sidebar.header("Eligible Players")
+    st.markdown("---")
+
+    # -----------------------
+    # MLB Filters
+    # -----------------------
+    mlb_min_games_h_form = 0
+    mlb_min_ip_p_form = 0.0
+
+    if form_use_mlb and len(mlb_meta):
+        st.subheader("MLB Filters")
+
+        hitters = mlb_meta[mlb_meta["mlb_type"] == "hitter"].copy()
+        hitters_vals = pd.to_numeric(hitters["career_g"], errors="coerce").fillna(0)
+        hitters_max = max(0, int(hitters_vals.median()) if len(hitters_vals) else 0)
+
+        mlb_min_games_h_form = st.slider(
+            "Hitters: minimum games played",
+            0,
+            hitters_max,
+            min(int(st.session_state.applied_mlb_min_games_h), hitters_max),
+            10,
+            disabled=filters_locked,
+        )
+
+        pitchers = mlb_meta[mlb_meta["mlb_type"] == "pitcher"].copy()
+        pitchers_vals = pd.to_numeric(pitchers["career_ip"], errors="coerce").fillna(0.0)
+        pitchers_max = float(max(0.0, float(pitchers_vals.median()) if len(pitchers_vals) else 0.0))
+
+        mlb_min_ip_p_form = st.slider(
+            "Pitchers: minimum innings pitched",
+            0.0,
+            pitchers_max,
+            min(float(st.session_state.applied_mlb_min_ip_p), pitchers_max),
+            10.0,
+            disabled=filters_locked,
+        )
+
+        all_mlb_teams = sorted(ALLOWED_MLB_TEAMS)
+
+        st.markdown("**Teams**")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.form_submit_button("Select All MLB Teams", use_container_width=True, disabled=filters_locked):
+                st.session_state.form_selected_mlb_teams = all_mlb_teams.copy()
+        with c2:
+            if st.form_submit_button("Select None MLB Teams", use_container_width=True, disabled=filters_locked):
+                st.session_state.form_selected_mlb_teams = []
+
+        selected_mlb_teams_form = st.multiselect(
+            "MLB Teams",
+            options=all_mlb_teams,
+            key="form_selected_mlb_teams",
+            disabled=filters_locked,
+        )
+
+    st.markdown("---")
+
+    # -----------------------
+    # NFL Filters
+    # -----------------------
+    nfl_min_games_form = 0
+
+    if form_use_nfl and len(nfl_meta):
+        st.subheader("NFL Filters")
+
+        nfl_vals = pd.to_numeric(nfl_meta["career_games"], errors="coerce").fillna(0)
+        nfl_max = max(0, int(nfl_vals.median()) if len(nfl_vals) else 0)
+
+        nfl_min_games_form = st.slider(
+            "Minimum games played",
+            0,
+            nfl_max,
+            min(int(st.session_state.applied_nfl_min_games), nfl_max),
+            10,
+            disabled=filters_locked,
+        )
+
+        all_nfl_positions = sorted({
+            pos for pos_list in nfl_meta["positions"].tolist()
+            for pos in (pos_list if isinstance(pos_list, list) else [])
+            if is_valid_nfl_position(pos)
+        })
+
+        st.markdown("**Positions**")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.form_submit_button("Select All NFL Positions", use_container_width=True, disabled=filters_locked):
+                st.session_state.form_selected_nfl_positions = all_nfl_positions.copy()
+        with c2:
+            if st.form_submit_button("Select None NFL Positions", use_container_width=True, disabled=filters_locked):
+                st.session_state.form_selected_nfl_positions = []
+
+        selected_nfl_positions_form = st.multiselect(
+            "NFL Positions",
+            options=all_nfl_positions,
+            key="form_selected_nfl_positions",
+            disabled=filters_locked,
+        )
+
+        all_nfl_teams = sorted(ALLOWED_NFL_TEAMS)
+
+        st.markdown("**Teams**")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.form_submit_button("Select All NFL Teams", use_container_width=True, disabled=filters_locked):
+                st.session_state.form_selected_nfl_teams = all_nfl_teams.copy()
+        with c2:
+            if st.form_submit_button("Select None NFL Teams", use_container_width=True, disabled=filters_locked):
+                st.session_state.form_selected_nfl_teams = []
+
+        selected_nfl_teams_form = st.multiselect(
+            "NFL Teams",
+            options=all_nfl_teams,
+            key="form_selected_nfl_teams",
+            disabled=filters_locked,
+        )
+
+    st.markdown("---")
+
+    apply_filters = st.form_submit_button(
+        "Apply / Start Game",
+        use_container_width=True,
+        disabled=filters_locked,
+    )
+
+# ============================================================
+# APPLY FILTERS
+# ============================================================
+if apply_filters and not filters_locked:
+    st.session_state.applied_use_nba = form_use_nba
+    st.session_state.applied_use_mlb = form_use_mlb
+    st.session_state.applied_use_nfl = form_use_nfl
+
+    st.session_state.applied_nba_min_games = int(nba_min_games_form)
+    st.session_state.applied_selected_nba_teams = list(st.session_state.form_selected_nba_teams)
+
+    st.session_state.applied_mlb_min_games_h = int(mlb_min_games_h_form)
+    st.session_state.applied_mlb_min_ip_p = float(mlb_min_ip_p_form)
+    st.session_state.applied_selected_mlb_teams = list(st.session_state.form_selected_mlb_teams)
+
+    st.session_state.applied_nfl_min_games = int(nfl_min_games_form)
+    st.session_state.applied_selected_nfl_positions = list(st.session_state.form_selected_nfl_positions)
+    st.session_state.applied_selected_nfl_teams = list(st.session_state.form_selected_nfl_teams)
+
+    st.session_state.used_player_keys = set()
+    st.session_state.player_id = None
+    st.session_state.league = None
+    st.session_state.score = 0
+    st.session_state.streak = 0
+    st.session_state.round = 1
+    st.session_state.lives = MAX_LIVES
+    st.session_state.game_over = False
+    st.session_state.feedback = ""
+    st.session_state.show_overlay = False
+    st.session_state.overlay_name = ""
+    st.session_state.overlay_status = ""
+    st.session_state.guess_choice = ""
+    st.session_state.attempts_this_player = 0
+    st.session_state.had_incorrect_this_player = False
+
+    st.rerun()
+
+# ============================================================
+# Use applied filters
+# ============================================================
+use_nba = st.session_state.applied_use_nba
+use_mlb = st.session_state.applied_use_mlb
+use_nfl = st.session_state.applied_use_nfl
+
+nba_min_games = st.session_state.applied_nba_min_games
+selected_nba_teams = st.session_state.applied_selected_nba_teams
+
+mlb_min_games_h = st.session_state.applied_mlb_min_games_h
+mlb_min_ip_p = st.session_state.applied_mlb_min_ip_p
+selected_mlb_teams = st.session_state.applied_selected_mlb_teams
+
+nfl_min_games = st.session_state.applied_nfl_min_games
+selected_nfl_positions = st.session_state.applied_selected_nfl_positions
+selected_nfl_teams = st.session_state.applied_selected_nfl_teams
 
 # ============================================================
 # Build eligible pool
 # ============================================================
 pool = []
 
-nba_ids = []
-mlb_ids = []
-nfl_ids = []
-
 if use_nba and len(nba_meta):
     nba_work = nba_meta.copy()
     nba_work["career_games_num"] = pd.to_numeric(nba_work["career_games"], errors="coerce").fillna(0).astype(int)
     nba_work = nba_work[nba_work["career_games_num"] >= int(nba_min_games)]
-
-    if selected_nba_teams:
-        nba_work = nba_work[
-            nba_work["teams"].apply(
-                lambda x: any(team in selected_nba_teams for team in (x if isinstance(x, list) else []))
-            )
-        ]
-
-    nba_ids = nba_work["player_id"].tolist()
-    pool.extend([("NBA", pid) for pid in nba_ids])
-    st.sidebar.caption(f"Eligible NBA players: {len(nba_ids)}")
+    nba_work = nba_work[nba_work["teams"].apply(lambda x: any(t in selected_nba_teams for t in (x or [])))]
+    pool += [("NBA", pid) for pid in nba_work["player_id"].tolist()]
+    st.sidebar.caption(f"Eligible NBA players: {len(nba_work)}")
 
 if use_mlb and len(mlb_meta):
     mlb_work = mlb_meta.copy()
+    mlb_work = mlb_work[mlb_work["teams"].apply(lambda x: any(t in selected_mlb_teams for t in (x or [])))]
 
-    if selected_mlb_teams:
-        mlb_work = mlb_work[
-            mlb_work["teams"].apply(
-                lambda x: any(team in selected_mlb_teams for team in (x if isinstance(x, list) else []))
-            )
-        ]
+    hitters = mlb_work[mlb_work["mlb_type"] == "hitter"]
+    pitchers = mlb_work[mlb_work["mlb_type"] == "pitcher"]
 
-    hitters = mlb_work[mlb_work["mlb_type"] == "hitter"].copy()
-    hitters_g = pd.to_numeric(hitters["career_g"], errors="coerce").fillna(0).astype(int)
-    hitter_ids = hitters.loc[hitters_g >= int(mlb_min_games_h), "player_id"].tolist()
+    hitter_ids = hitters[pd.to_numeric(hitters["career_g"], errors="coerce").fillna(0) >= mlb_min_games_h]["player_id"].tolist()
+    pitcher_ids = pitchers[pd.to_numeric(pitchers["career_ip"], errors="coerce").fillna(0.0) >= mlb_min_ip_p]["player_id"].tolist()
 
-    pitchers = mlb_work[mlb_work["mlb_type"] == "pitcher"].copy()
-    pitchers_ip = pd.to_numeric(pitchers["career_ip"], errors="coerce").fillna(0.0).astype(float)
-    pitcher_ids = pitchers.loc[pitchers_ip >= float(mlb_min_ip_p), "player_id"].tolist()
-
-    mlb_ids = hitter_ids + pitcher_ids
-    pool.extend([("MLB", pid) for pid in mlb_ids])
-
-    st.sidebar.caption(f"Eligible MLB hitters: {len(hitter_ids)}")
-    st.sidebar.caption(f"Eligible MLB pitchers: {len(pitcher_ids)}")
-    st.sidebar.caption(f"Eligible MLB total: {len(mlb_ids)}")
+    pool += [("MLB", pid) for pid in hitter_ids + pitcher_ids]
+    st.sidebar.caption(f"Eligible MLB players: {len(mlb_work)}")
 
 if use_nfl and len(nfl_meta):
     nfl_work = nfl_meta.copy()
     nfl_work["career_games_num"] = pd.to_numeric(nfl_work["career_games"], errors="coerce").fillna(0).astype(int)
     nfl_work = nfl_work[nfl_work["career_games_num"] >= int(nfl_min_games)]
+    nfl_work = nfl_work[nfl_work["positions"].apply(lambda x: any(p in selected_nfl_positions for p in (x or [])))]
+    nfl_work = nfl_work[nfl_work["teams"].apply(lambda x: any(t in selected_nfl_teams for t in (x or [])))]
 
-    if selected_nfl_positions:
-        nfl_work = nfl_work[
-            nfl_work["positions"].apply(
-                lambda x: any(pos in selected_nfl_positions for pos in (x if isinstance(x, list) else []))
-            )
-        ]
-
-    if selected_nfl_teams:
-        nfl_work = nfl_work[
-            nfl_work["teams"].apply(
-                lambda x: any(team in selected_nfl_teams for team in (x if isinstance(x, list) else []))
-            )
-        ]
-
-    nfl_ids = nfl_work["player_id"].tolist()
-    pool.extend([("NFL", pid) for pid in nfl_ids])
-
-    st.sidebar.caption(f"Eligible NFL players: {len(nfl_ids)}")
+    pool += [("NFL", pid) for pid in nfl_work["player_id"].tolist()]
+    st.sidebar.caption(f"Eligible NFL players: {len(nfl_work)}")
 
 if not pool:
-    st.sidebar.error("No players match your current filters.")
+    st.warning("No players match your filters.")
     st.stop()
 
-# Ensure a valid current player exists
+# ============================================================
+# Ensure current player is valid
+# ============================================================
 if "player_id" not in st.session_state or "league" not in st.session_state:
     begin_round(pool)
 else:
-    current_league = st.session_state.get("league")
-    current_pid = st.session_state.get("player_id")
-    current_tuple = (current_league, current_pid)
-
+    current_tuple = (st.session_state.get("league"), st.session_state.get("player_id"))
     if current_tuple not in pool:
         begin_round(pool)
     else:
-        current_key = make_player_key(current_league, current_pid)
+        current_key = make_player_key(st.session_state.get("league"), st.session_state.get("player_id"))
         if current_key not in st.session_state.used_player_keys:
             st.session_state.used_player_keys.add(current_key)
 
 unused_pool = get_unused_pool(pool)
 
 if not st.session_state.get("player_id") or not st.session_state.get("league"):
-    st.markdown("### There are no more left. Maybe stop being such a baby and expand the filters a little. Challenge yourself.")
+    st.markdown("### You cleared the full player pool for this run.")
     st.write(f"Players used this run: {len(st.session_state.get('used_player_keys', set()))} / {len(pool)}")
     if st.button("Play Again", use_container_width=True):
         reset_game(pool)
